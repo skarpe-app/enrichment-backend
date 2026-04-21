@@ -5,7 +5,7 @@ services:
     name: enrichment-worker
     env: node
     plan: starter
-    buildCommand: npm ci && npx prisma generate && npm run build
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
     startCommand: node dist/worker.js
     envVars:
       - key: DATABASE_URL_POOLER
@@ -34,7 +34,7 @@ services:
     name: enrichment-api
     env: node
     plan: starter
-    buildCommand: npm ci && npx prisma generate && npm run build
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
     startCommand: node dist/server.js
     healthCheckPath: /api/health
     envVars:
