@@ -1,0 +1,62 @@
+services:
+  # Background worker: pg-boss consumer + scheduled jobs
+  # Deploy FIRST on initial setup so pg-boss schema migrations run before API sends jobs.
+  - type: worker
+    name: enrichment-worker
+    env: node
+    plan: starter
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: node dist/worker.js
+    envVars:
+      - key: DATABASE_URL_POOLER
+        sync: false
+      - key: DATABASE_URL_DIRECT
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_DEFAULT_PROMPT_ID
+        sync: false
+      - key: OPENAI_DEFAULT_PROMPT_VERSION
+        sync: false
+      - key: OPENAI_DEFAULT_MODEL
+        value: gpt-4.1-mini
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: NODE_ENV
+        value: production
+
+  # Web service: Fastify API (no static files — frontend deployed separately)
+  - type: web
+    name: enrichment-api
+    env: node
+    plan: starter
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: node dist/server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL_POOLER
+        sync: false
+      - key: DATABASE_URL_DIRECT
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_DEFAULT_PROMPT_ID
+        sync: false
+      - key: OPENAI_DEFAULT_PROMPT_VERSION
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001

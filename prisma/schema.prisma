@@ -1,0 +1,540 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_POOLER")
+  directUrl = env("DATABASE_URL_DIRECT")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  USER
+  ADMIN
+
+  @@map("user_role")
+}
+
+enum ListStatus {
+  pending
+  importing
+  import_failed
+  ready
+
+  @@map("list_status")
+}
+
+enum RunStatus {
+  queuing
+  processing
+  completed
+  stopped
+  failed
+
+  @@map("run_status")
+}
+
+enum RunItemStatus {
+  pending
+  scraping
+  classifying
+  completed
+  failed
+  skipped
+  retrying
+
+  @@map("run_item_status")
+}
+
+enum DomainSource {
+  website
+  email
+
+  @@map("domain_source")
+}
+
+enum DomainResolutionMode {
+  email_only
+  website_only
+  combined
+
+  @@map("domain_resolution_mode")
+}
+
+enum CombinedPriority {
+  email_first
+  website_first
+
+  @@map("combined_priority")
+}
+
+enum AiProvider {
+  openai
+  anthropic
+
+  @@map("ai_provider")
+}
+
+enum PromptMode {
+  prompt_id
+  text
+
+  @@map("prompt_mode")
+}
+
+enum ScopeType {
+  all
+  selected
+  filtered
+
+  @@map("scope_type")
+}
+
+enum BillingSource {
+  system_default
+  user_credential
+
+  @@map("billing_source")
+}
+
+enum FieldType {
+  text
+  number
+  date
+  boolean
+  url
+  select
+
+  @@map("field_type")
+}
+
+enum ProxyProtocol {
+  http
+  https
+  socks5
+
+  @@map("proxy_protocol")
+}
+
+enum ScrapeStatus {
+  success
+  failed
+  cached
+  skipped
+
+  @@map("scrape_status")
+}
+
+enum SkipReason {
+  personal_email
+  invalid_domain
+  no_domain
+  non_html_content
+
+  @@map("skip_reason")
+}
+
+enum RunEventStep {
+  dns_check
+  scrape
+  classify
+  cache_hit
+  skip
+  error
+  retry
+
+  @@map("run_event_step")
+}
+
+enum RunEventStatus {
+  success
+  failed
+  skipped
+  cached
+
+  @@map("run_event_status")
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model Profile {
+  id                 String   @id @default(uuid()) @db.Uuid
+  email              String   @unique
+  name               String?
+  role               UserRole @default(USER)
+  domainCacheTtlDays Int      @default(30) @map("domain_cache_ttl_days")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  contactLists     ContactList[]
+  aiCredentials    AiCredential[]
+  customFields     CustomField[]
+  enrichmentRuns   EnrichmentRun[]
+  billingSnapshots BillingSnapshot[]
+
+  @@map("profiles")
+}
+
+model AiCredential {
+  id        String     @id @default(uuid()) @db.Uuid
+  userId    String     @map("user_id") @db.Uuid
+  provider  AiProvider
+  apiKeyEnc String     @map("api_key_enc")
+  isDefault Boolean    @default(false) @map("is_default")
+  label     String
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  user           Profile         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enrichmentRuns EnrichmentRun[]
+
+  @@index([userId, provider])
+  // Partial unique (user_id, provider) WHERE is_default = true — created in manual SQL migration
+  @@map("ai_credentials")
+}
+
+model CustomField {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  name          String
+  fieldKey      String   @map("field_key")
+  fieldType     FieldType @map("field_type")
+  selectOptions String[] @map("select_options")
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fieldKey])
+  @@map("custom_fields")
+}
+
+model ContactList {
+  id              String     @id @default(uuid()) @db.Uuid
+  userId          String     @map("user_id") @db.Uuid
+  name            String
+  fileName        String     @map("file_name")
+  sourceRowCount  Int        @default(0) @map("source_row_count")
+  importedCount   Int        @default(0) @map("imported_count")
+  duplicateCount  Int        @default(0) @map("duplicate_count")
+  rejectedCount   Int        @default(0) @map("rejected_count")
+  status          ListStatus @default(pending)
+  errorMessage    String?    @map("error_message")
+  originalHeaders String[]   @map("original_headers")
+  columnMapping   Json?      @map("column_mapping")
+  deletedAt       DateTime?  @map("deleted_at") @db.Timestamptz
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  user           Profile         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contacts       Contact[]
+  enrichmentRuns EnrichmentRun[]
+
+  @@index([userId])
+  @@map("contact_lists")
+}
+
+model Contact {
+  id                       String       @id @default(uuid()) @db.Uuid
+  listId                   String       @map("list_id") @db.Uuid
+  email                    String
+  firstName                String?      @map("first_name")
+  lastName                 String?      @map("last_name")
+  name                     String?
+  companyName              String?      @map("company_name")
+  companyWebsite           String?      @map("company_website")
+  customFields             Json?        @map("custom_fields")
+  originalRow              Json         @map("original_row")
+  rowIndex                 Int          @map("row_index")
+  websiteDomain            String?      @map("website_domain")
+  emailDomain              String?      @map("email_domain")
+  resolvedDomain           String?      @map("resolved_domain")
+  domainSource             DomainSource? @map("domain_source")
+  domainMismatch           Boolean      @default(false) @map("domain_mismatch")
+  latestResultId           String?      @map("latest_result_id") @db.Uuid
+  latestSuccessfulResultId String?      @map("latest_successful_result_id") @db.Uuid
+  createdAt                DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  list                 ContactList        @relation(fields: [listId], references: [id], onDelete: Cascade)
+  latestResult         EnrichmentRunItem? @relation("LatestResult", fields: [latestResultId], references: [id], onDelete: SetNull)
+  latestSuccessfulResult EnrichmentRunItem? @relation("LatestSuccessfulResult", fields: [latestSuccessfulResultId], references: [id], onDelete: SetNull)
+  enrichmentRunItems   EnrichmentRunItem[] @relation("ContactItems")
+
+  @@unique([listId, email])
+  @@index([listId])
+  @@map("contacts")
+}
+
+model EnrichmentRun {
+  id                    String              @id @default(uuid()) @db.Uuid
+  listId                String              @map("list_id") @db.Uuid
+  userId                String              @map("user_id") @db.Uuid
+  status                RunStatus           @default(queuing)
+  // AI config
+  aiProvider            AiProvider          @default(openai) @map("ai_provider")
+  aiModel               String              @map("ai_model")
+  promptMode            PromptMode          @map("prompt_mode")
+  promptId              String?             @map("prompt_id")
+  promptVersion         String?             @map("prompt_version")
+  promptText            String?             @map("prompt_text")
+  promptHash            String?             @map("prompt_hash")
+  billingSource         BillingSource       @default(system_default) @map("billing_source")
+  aiCredentialId        String?             @map("ai_credential_id") @db.Uuid
+  // Domain resolution
+  domainResolutionMode  DomainResolutionMode @map("domain_resolution_mode")
+  combinedPriority      CombinedPriority?   @map("combined_priority")
+  // Scrape
+  forceRescrape         Boolean             @default(false) @map("force_rescrape")
+  domainCacheTtlDays    Int                 @map("domain_cache_ttl_days")
+  // Scope
+  scopeType             ScopeType           @map("scope_type")
+  selectedContactIds    String[]            @map("selected_contact_ids") @db.Uuid
+  filterSnapshot        Json?               @map("filter_snapshot")
+  scopeMaterialized     Boolean             @default(false) @map("scope_materialized")
+  // Counters
+  totalItems            Int                 @default(0) @map("total_items")
+  completedItems        Int                 @default(0) @map("completed_items")
+  failedItems           Int                 @default(0) @map("failed_items")
+  skippedItems          Int                 @default(0) @map("skipped_items")
+  // Cost
+  totalInputTokens      Int                 @default(0) @map("total_input_tokens")
+  totalOutputTokens     Int                 @default(0) @map("total_output_tokens")
+  totalCostUsd          Decimal             @default(0) @map("total_cost_usd") @db.Decimal(10, 6)
+  // Error surface
+  errorMessage          String?             @map("error_message")
+  // Timestamps
+  startedAt             DateTime?           @map("started_at") @db.Timestamptz
+  stoppedAt             DateTime?           @map("stopped_at") @db.Timestamptz
+  completedAt           DateTime?           @map("completed_at") @db.Timestamptz
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt             DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  list              ContactList        @relation(fields: [listId], references: [id], onDelete: Cascade)
+  user              Profile            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  aiCredential      AiCredential?      @relation(fields: [aiCredentialId], references: [id], onDelete: Restrict)
+  items             EnrichmentRunItem[]
+  runEvents         RunEvent[]
+  proxyAttemptEvents ProxyAttemptEvent[]
+
+  @@index([listId])
+  @@index([userId])
+  @@index([status])
+  // Partial unique (list_id) WHERE status IN ('queuing','processing') — created in manual SQL migration
+  @@map("enrichment_runs")
+}
+
+model EnrichmentRunItem {
+  id               String        @id @default(uuid()) @db.Uuid
+  runId            String        @map("run_id") @db.Uuid
+  contactId        String        @map("contact_id") @db.Uuid
+  status           RunItemStatus @default(pending)
+  // Domain
+  domain           String?
+  domainSource     DomainSource? @map("domain_source")
+  fallbackDomain   String?       @map("fallback_domain")
+  fallbackAttempted Boolean      @default(false) @map("fallback_attempted")
+  fallbackSource   DomainSource? @map("fallback_source")
+  // Scrape
+  scrapeStatus     ScrapeStatus? @map("scrape_status")
+  scrapeError      String?       @map("scrape_error")
+  scrapeMs         Int?          @map("scrape_ms")
+  proxyUsed        String?       @map("proxy_used")
+  // Classification
+  industry         String?
+  subIndustry      String?       @map("sub_industry")
+  confidence       Int?
+  reasoning        String?
+  // Cost
+  inputTokens      Int?          @map("input_tokens")
+  outputTokens     Int?          @map("output_tokens")
+  costUsd          Decimal?      @map("cost_usd") @db.Decimal(10, 6)
+  classifyMs       Int?          @map("classify_ms")
+  // Error / skip
+  skipReason       SkipReason?   @map("skip_reason")
+  errorMessage     String?       @map("error_message")
+  attemptCount     Int           @default(0) @map("attempt_count")
+  // Concurrency
+  lockedAt         DateTime?     @map("locked_at") @db.Timestamptz
+  finishedAt       DateTime?     @map("finished_at") @db.Timestamptz
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  run                    EnrichmentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  contact                Contact       @relation("ContactItems", fields: [contactId], references: [id], onDelete: Cascade)
+  contactLatestResult    Contact[]     @relation("LatestResult")
+  contactLatestSuccessful Contact[]    @relation("LatestSuccessfulResult")
+  runEvents              RunEvent[]
+
+  @@unique([runId, contactId])
+  @@index([runId, status])
+  @@index([contactId])
+  @@map("enrichment_run_items")
+}
+
+model Domain {
+  id           String    @id @default(uuid()) @db.Uuid
+  domain       String    @unique
+  dnsValid     Boolean?  @map("dns_valid")
+  dnsCheckedAt DateTime? @map("dns_checked_at") @db.Timestamptz
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  snapshots       DomainSnapshot[]
+  classifications DomainClassification[]
+
+  @@map("domains")
+}
+
+model DomainSnapshot {
+  id              String    @id @default(uuid()) @db.Uuid
+  domainId        String    @map("domain_id") @db.Uuid
+  pageTitle       String?   @map("page_title")
+  metaDescription String?   @map("meta_description")
+  headings        String[]
+  cleanedText     String?   @map("cleaned_text")
+  internalPages   Json?     @map("internal_pages")
+  pagesScraped    Int       @default(1) @map("pages_scraped")
+  combinedDigest  String?   @map("combined_digest")
+  httpStatus      Int?      @map("http_status")
+  scrapeSuccess   Boolean   @default(false) @map("scrape_success")
+  scrapeError     String?   @map("scrape_error")
+  contentLength   Int?      @map("content_length")
+  proxyUsed       String?   @map("proxy_used")
+  scrapedAt       DateTime  @map("scraped_at") @db.Timestamptz
+  invalidatedAt   DateTime? @map("invalidated_at") @db.Timestamptz
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  domain          Domain                @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  classifications DomainClassification[]
+
+  @@index([domainId])
+  @@index([domainId, scrapedAt])
+  @@map("domain_snapshots")
+}
+
+model DomainClassification {
+  id            String     @id @default(uuid()) @db.Uuid
+  domainId      String     @map("domain_id") @db.Uuid
+  snapshotId    String     @map("snapshot_id") @db.Uuid
+  aiProvider    AiProvider @map("ai_provider")
+  aiModel       String     @map("ai_model")
+  promptId      String?    @map("prompt_id")
+  promptVersion String?    @map("prompt_version")
+  promptHash    String?    @map("prompt_hash")
+  industry      String
+  subIndustry   String?    @map("sub_industry")
+  confidence    Int
+  reasoning     String
+  inputTokens   Int        @map("input_tokens")
+  outputTokens  Int        @map("output_tokens")
+  costUsd       Decimal    @map("cost_usd") @db.Decimal(10, 6)
+  classifyMs    Int?       @map("classify_ms")
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  domain   Domain         @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  snapshot DomainSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  // Three partial unique indexes + CHECK constraint — created in manual SQL migration
+  @@index([domainId])
+  @@map("domain_classifications")
+}
+
+model ProxyEndpoint {
+  id            String        @id @default(uuid()) @db.Uuid
+  name          String
+  host          String
+  port          Int
+  usernameEnc   String?       @map("username_enc")
+  passwordEnc   String?       @map("password_enc")
+  protocol      ProxyProtocol @default(http)
+  isActive      Boolean       @default(true) @map("is_active")
+  priority      Int           @default(0)
+  totalRequests Int           @default(0) @map("total_requests")
+  successCount  Int           @default(0) @map("success_count")
+  failureCount  Int           @default(0) @map("failure_count")
+  avgResponseMs Int           @default(0) @map("avg_response_ms")
+  lastUsedAt    DateTime?     @map("last_used_at") @db.Timestamptz
+  lastError     String?       @map("last_error")
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  proxyAttemptEvents ProxyAttemptEvent[]
+
+  @@map("proxy_endpoints")
+}
+
+model ProxyAttemptEvent {
+  id           String   @id @default(uuid()) @db.Uuid
+  proxyId      String?  @map("proxy_id") @db.Uuid
+  proxyName    String   @map("proxy_name")
+  domain       String
+  runId        String?  @map("run_id") @db.Uuid
+  phase        Int
+  success      Boolean
+  httpStatus   Int?     @map("http_status")
+  responseMs   Int      @map("response_ms")
+  errorMessage String?  @map("error_message")
+  metadata     Json?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  proxy ProxyEndpoint? @relation(fields: [proxyId], references: [id], onDelete: SetNull)
+  run   EnrichmentRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([proxyId, createdAt])
+  @@index([runId])
+  @@map("proxy_attempt_events")
+}
+
+model RunEvent {
+  id        BigInt         @id @default(autoincrement())
+  runId     String         @map("run_id") @db.Uuid
+  runItemId String?        @map("run_item_id") @db.Uuid
+  contactId String?        @map("contact_id") @db.Uuid
+  step      RunEventStep
+  status    RunEventStatus
+  message   String
+  durationMs Int?          @map("duration_ms")
+  metadata  Json?
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  run     EnrichmentRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  runItem EnrichmentRunItem? @relation(fields: [runItemId], references: [id], onDelete: SetNull)
+
+  @@index([runId, id])
+  @@map("run_events")
+}
+
+model WorkerHeartbeat {
+  id            String   @id @default(uuid()) @db.Uuid
+  instanceId    String   @unique @map("instance_id")
+  lastHeartbeat DateTime @map("last_heartbeat") @db.Timestamptz
+  startedAt     DateTime @map("started_at") @db.Timestamptz
+  queues        String[]
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("worker_heartbeats")
+}
+
+model BillingSnapshot {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  listId            String   @map("list_id") @db.Uuid
+  listName          String   @map("list_name")
+  totalRuns         Int      @map("total_runs")
+  totalItems        Int      @map("total_items")
+  totalCostUsd      Decimal  @map("total_cost_usd") @db.Decimal(10, 6)
+  totalInputTokens  Int      @map("total_input_tokens")
+  totalOutputTokens Int      @map("total_output_tokens")
+  deletedAt         DateTime @map("deleted_at") @db.Timestamptz
+  purgedAt          DateTime @default(now()) @map("purged_at") @db.Timestamptz
+
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([listId])
+  @@index([userId])
+  @@map("billing_snapshots")
+}
