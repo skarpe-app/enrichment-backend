@@ -285,8 +285,9 @@ export async function scrapeUrl(
   const targetUrl = `https://${domain}`;
   const allAttempts: ProxyAttemptLog[] = [];
   const controller = new AbortController();
+  const scrapeStart = Date.now();
 
-  // ─── Phase 1: Custom proxies + direct fetch (8s) ────────────────────────
+  // ─── Phase 1: Custom proxies + direct fetch (5s) ────────────────────────
   const phase1Attempts: Promise<ProxyOutcome>[] = [];
 
   // Load admin proxies
@@ -301,15 +302,17 @@ export async function scrapeUrl(
   // Always include direct fetch
   phase1Attempts.push(directFetch(targetUrl, controller.signal));
 
+  const phase1Start = Date.now();
   const phase1Result = await racePhase(phase1Attempts, 5000);
   logAttempts(allAttempts, phase1Result, 1, null);
+  console.log(`[scraper] ${domain.padEnd(40).slice(0, 40)} phase1 ${phase1Result.kind.padEnd(9)} via=${phase1Result.proxyName.padEnd(16)} ${(Date.now() - phase1Start + 'ms').padStart(6)}`);
 
   // html → done, non_html → done (don't retry per §12)
   if (phase1Result.kind === 'html' || phase1Result.kind === 'non_html') {
     return { outcome: phase1Result, attempts: allAttempts };
   }
 
-  // ─── Phase 2: Free adapters (8s) ───────────────────────────────────────
+  // ─── Phase 2: Free adapters (5s) ───────────────────────────────────────
   const phase2Attempts = [
     corsproxyFree(targetUrl, controller.signal),
     codetabs(targetUrl, controller.signal),
@@ -317,8 +320,10 @@ export async function scrapeUrl(
     allorigins(targetUrl, controller.signal),
   ];
 
+  const phase2Start = Date.now();
   const phase2Result = await racePhase(phase2Attempts, 5000);
   logAttempts(allAttempts, phase2Result, 2, null);
+  console.log(`[scraper] ${domain.padEnd(40).slice(0, 40)} phase2 ${phase2Result.kind.padEnd(9)} via=${phase2Result.proxyName.padEnd(16)} ${(Date.now() - phase2Start + 'ms').padStart(6)}`);
 
   if (phase2Result.kind === 'html' || phase2Result.kind === 'non_html') {
     return { outcome: phase2Result, attempts: allAttempts };
@@ -326,13 +331,16 @@ export async function scrapeUrl(
 
   // ─── Phase 3: CorsProxy.io paid (45s) — only if key is configured ────
   if (!CORSPROXY_API_KEY) {
+    console.log(`[scraper] ${domain.padEnd(40).slice(0, 40)} ALL_FAILED (no CORSPROXY_API_KEY set, skipping phase3) total=${Date.now() - scrapeStart}ms`);
     return { outcome: phase2Result, attempts: allAttempts };
   }
+  const phase3Start = Date.now();
   const phase3Result = await racePhase(
     [corsproxyPaid(targetUrl, controller.signal)],
     45000
   );
   logAttempts(allAttempts, phase3Result, 3, null);
+  console.log(`[scraper] ${domain.padEnd(40).slice(0, 40)} phase3 ${phase3Result.kind.padEnd(9)} via=${phase3Result.proxyName.padEnd(16)} ${(Date.now() - phase3Start + 'ms').padStart(6)} total=${Date.now() - scrapeStart}ms`);
 
   return { outcome: phase3Result, attempts: allAttempts };
 }

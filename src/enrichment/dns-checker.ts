@@ -24,11 +24,14 @@ export async function checkDns(domain: string): Promise<{ valid: boolean; cached
 
   // Perform DNS lookup
   let valid = false;
+  const dnsStart = Date.now();
   try {
     const addresses = await dns.resolve4(domain);
     valid = addresses.length > 0;
-  } catch {
+  } catch (err) {
     valid = false;
+    const code = (err as NodeJS.ErrnoException)?.code ?? 'UNKNOWN';
+    console.log(`[FastFail] ${domain.padEnd(40).slice(0, 40)} DNS=${code.padEnd(10)} ${(Date.now() - dnsStart + 'ms').padStart(6)}`);
   }
 
   // Upsert domain record — create if not exists, update if exists
