@@ -28,6 +28,9 @@ const envSchema = z.object({
 
   // Scraper user agent (defaults to Chrome in proxy-racer.ts if not set)
   SCRAPER_USER_AGENT: z.string().optional(),
+
+  // CorsProxy.io paid premium key (Phase 3 fallback scrape proxy)
+  CORSPROXY_API_KEY: z.string().optional(),
 });
 
 function loadConfig() {

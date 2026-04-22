@@ -3,8 +3,8 @@ import { prisma } from '../db.js';
 import { config } from '../config.js';
 import { decrypt } from '../utils/encryption.js';
 
-// ─── CorsProxy.io paid — hardcoded per §12 ──────────────────────────────────
-const CORSPROXY_API_KEY = 'cf93a78a';
+// ─── CorsProxy.io paid (Phase 3 fallback) — from env var ───────────────────
+const CORSPROXY_API_KEY = config.CORSPROXY_API_KEY;
 
 // ─── Browser-like headers per §12 ────────────────────────────────────────────
 const SCRAPE_HEADERS = {
@@ -294,7 +294,10 @@ export async function scrapeUrl(
     return { outcome: phase2Result, attempts: allAttempts };
   }
 
-  // ─── Phase 3: CorsProxy.io paid (45s) ─────────────────────────────────
+  // ─── Phase 3: CorsProxy.io paid (45s) — only if key is configured ────
+  if (!CORSPROXY_API_KEY) {
+    return { outcome: phase2Result, attempts: allAttempts };
+  }
   const phase3Result = await racePhase(
     [corsproxyPaid(targetUrl, controller.signal)],
     45000

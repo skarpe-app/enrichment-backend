@@ -26,6 +26,8 @@ services:
         value: gpt-4.1-mini
       - key: ENCRYPTION_KEY
         sync: false
+      - key: CORSPROXY_API_KEY
+        sync: false
       - key: NODE_ENV
         value: production
 
@@ -53,6 +55,8 @@ services:
       - key: OPENAI_DEFAULT_PROMPT_VERSION
         sync: false
       - key: ENCRYPTION_KEY
+        sync: false
+      - key: CORSPROXY_API_KEY
         sync: false
       - key: FRONTEND_URL
         sync: false
