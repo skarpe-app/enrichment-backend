@@ -20,6 +20,18 @@ const app = Fastify({
   bodyLimit: 100 * 1024 * 1024, // 100MB per §8.1
 });
 
+// Allow empty-body POSTs (resume, stop, test endpoints) even when Content-Type
+// is application/json. Default Fastify rejects with 400 "Body cannot be empty".
+app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+  if (body === '' || body == null) return done(null, undefined);
+  try {
+    done(null, JSON.parse(body as string));
+  } catch (err) {
+    (err as any).statusCode = 400;
+    done(err as Error, undefined);
+  }
+});
+
 // ─── CORS ────────────────────────────────────────────────────────────────────
 // In dev: allow Vite dev server. In prod: allow configured frontend origin.
 await app.register(cors, {
