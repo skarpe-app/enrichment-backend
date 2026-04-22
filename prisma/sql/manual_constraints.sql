@@ -90,11 +90,14 @@ ALTER TABLE enrichment_runs
   );
 
 -- Scope constraints
+-- NOTE: Prisma always writes empty array `{}` for non-null String[] columns (can't write NULL).
+-- So we treat empty array as "absent" via cardinality() = 0.
 ALTER TABLE enrichment_runs
   ADD CONSTRAINT enrichment_runs_scope_all_check
   CHECK (
     scope_type != 'all'
-    OR (selected_contact_ids IS NULL AND filter_snapshot IS NULL)
+    OR ((selected_contact_ids IS NULL OR cardinality(selected_contact_ids) = 0)
+        AND filter_snapshot IS NULL)
   );
 
 ALTER TABLE enrichment_runs
@@ -103,7 +106,7 @@ ALTER TABLE enrichment_runs
     scope_type != 'selected'
     OR (
       selected_contact_ids IS NOT NULL
-      AND array_length(selected_contact_ids, 1) BETWEEN 1 AND 10000
+      AND cardinality(selected_contact_ids) BETWEEN 1 AND 10000
       AND filter_snapshot IS NULL
     )
   );
@@ -112,5 +115,6 @@ ALTER TABLE enrichment_runs
   ADD CONSTRAINT enrichment_runs_scope_filtered_check
   CHECK (
     scope_type != 'filtered'
-    OR (filter_snapshot IS NOT NULL AND selected_contact_ids IS NULL)
+    OR (filter_snapshot IS NOT NULL
+        AND (selected_contact_ids IS NULL OR cardinality(selected_contact_ids) = 0))
   );
