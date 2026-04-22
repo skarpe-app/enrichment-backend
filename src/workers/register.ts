@@ -32,9 +32,12 @@ export async function registerAllHandlers(boss: PgBoss) {
   // - teamConcurrency: 30 items processed in PARALLEL within the batch
   // - pollingIntervalSeconds: 0.5 — poll 4× faster than default 2s
   // Tuned for OpenAI Tier 1/2 (~500 RPM, 200K TPM on gpt-4.1-mini).
+  // pg-boss v10: use `batchSize` to fetch N jobs per poll. The handler then runs
+  // them concurrently with Promise.all. (`teamSize`/`teamConcurrency` were v9 and
+  // are silently ignored in v10 — that's why we were stuck at active=1.)
   await boss.work(
     'enrich-contact',
-    { teamSize: 30, teamConcurrency: 30, pollingIntervalSeconds: 0.5 } as any,
+    { batchSize: 30, pollingIntervalSeconds: 0.5 } as any,
     async (jobs: any[]) => {
       await Promise.all(
         jobs.map((job) => enrichContact((job.data as { runItemId: string }).runItemId))

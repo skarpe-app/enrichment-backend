@@ -140,18 +140,41 @@ function withTimeout(promise: Promise<ProxyOutcome>, timeoutMs: number): Promise
 
 // ─── Phase race resolver per §12 ────────────────────────────────────────────
 
+/**
+ * Race attempts and short-circuit on the first acceptable outcome.
+ * Returns immediately on the first `html` (best). For non-html/block/error,
+ * waits for all to settle and applies precedence: html > non_html > block > error.
+ *
+ * This avoids the previous behaviour where one slow proxy held up a phase for
+ * the full timeout even when a fast proxy already returned a usable result.
+ */
 async function racePhase(
   attempts: Promise<ProxyOutcome>[],
   timeoutMs: number
 ): Promise<ProxyOutcome> {
-  const results = await Promise.allSettled(attempts.map((p) => withTimeout(p, timeoutMs)));
+  const wrapped = attempts.map((p) => withTimeout(p, timeoutMs));
+
+  // Short-circuit on first html
+  const htmlPromise = new Promise<ProxyOutcome | null>((resolve) => {
+    let pending = wrapped.length;
+    if (pending === 0) return resolve(null);
+    for (const p of wrapped) {
+      p.then((o) => {
+        if (o.kind === 'html') resolve(o);
+      }).finally(() => {
+        if (--pending === 0) resolve(null);
+      });
+    }
+  });
+
+  const firstHtml = await htmlPromise;
+  if (firstHtml) return firstHtml;
+
+  // No html anywhere — collect everything and apply precedence
+  const results = await Promise.allSettled(wrapped);
   const outcomes = results
     .filter((r): r is PromiseFulfilledResult<ProxyOutcome> => r.status === 'fulfilled')
     .map((r) => r.value);
-
-  // Precedence: html > non_html > block > error (fastest within each tier)
-  const htmls = outcomes.filter((o) => o.kind === 'html');
-  if (htmls.length) return htmls.sort((a, b) => a.responseMs - b.responseMs)[0];
 
   const nonHtmls = outcomes.filter((o) => o.kind === 'non_html');
   if (nonHtmls.length) return nonHtmls.sort((a, b) => a.responseMs - b.responseMs)[0];
@@ -325,7 +348,11 @@ export async function scrapeUrl(
   logAttempts(allAttempts, phase2Result, 2, null);
   console.log(`[scraper] ${domain.padEnd(40).slice(0, 40)} phase2 ${phase2Result.kind.padEnd(9)} via=${phase2Result.proxyName.padEnd(16)} ${(Date.now() - phase2Start + 'ms').padStart(6)}`);
 
-  if (phase2Result.kind === 'html' || phase2Result.kind === 'non_html') {
+  // Phase 2 html → done. non_html from a free proxy is suspicious (codetabs/
+  // allorigins sometimes wrap real HTML in JSON), so fall through to phase3 if
+  // we have a paid key — only trust phase2 non_html as terminal when there's no
+  // phase3 to try.
+  if (phase2Result.kind === 'html') {
     return { outcome: phase2Result, attempts: allAttempts };
   }
 
@@ -341,6 +368,12 @@ export async function scrapeUrl(
   );
   logAttempts(allAttempts, phase3Result, 3, null);
   console.log(`[scraper] ${domain.padEnd(40).slice(0, 40)} phase3 ${phase3Result.kind.padEnd(9)} via=${phase3Result.proxyName.padEnd(16)} ${(Date.now() - phase3Start + 'ms').padStart(6)} total=${Date.now() - scrapeStart}ms`);
+
+  // If phase3 failed but phase2 had a non_html, prefer phase2's non_html
+  // so we report a clean skip instead of a hard fail.
+  if (phase3Result.kind !== 'html' && phase2Result.kind === 'non_html') {
+    return { outcome: phase2Result, attempts: allAttempts };
+  }
 
   return { outcome: phase3Result, attempts: allAttempts };
 }

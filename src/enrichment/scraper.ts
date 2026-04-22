@@ -185,29 +185,27 @@ async function scrapeDomainImpl(
     };
   }
 
-  // Smart multi-page scraping
+  // Smart multi-page scraping — fire all subpage fetches in parallel and
+  // accumulate results in declared order until we have enough content.
+  // Sequential awaits used to take 5–18s for 3 pages; parallel takes ~5s total.
   const pagesToScrape = getInternalPagesToScrape(homepage.cleanedText.length);
   const internalPages: Array<{ path: string; title: string | null; cleanedText: string }> = [];
 
-  for (const pagePath of pagesToScrape) {
-    try {
-      const pageResult = await scrapeUrl(`${domainName}${pagePath}`, runId);
-      if (pageResult.outcome.kind === 'html') {
-        const cleaned = cleanHtml(pageResult.outcome.body);
-        internalPages.push({
-          path: pagePath,
-          title: cleaned.pageTitle,
-          cleanedText: cleaned.cleanedText,
-        });
+  const subpageResults = await Promise.allSettled(
+    pagesToScrape.map((pagePath) =>
+      scrapeUrl(`${domainName}${pagePath}`, runId).then((r) => ({ pagePath, result: r }))
+    )
+  );
 
-        // Stop if we have enough content
-        const totalChars = homepage.cleanedText.length +
-          internalPages.reduce((sum, p) => sum + p.cleanedText.length, 0);
-        if (totalChars >= 5000) break;
-      }
-    } catch {
-      // Internal page scrape failure is non-fatal
-    }
+  let totalChars = homepage.cleanedText.length;
+  for (const settled of subpageResults) {
+    if (settled.status !== 'fulfilled') continue;
+    const { pagePath, result } = settled.value;
+    if (result.outcome.kind !== 'html') continue;
+    const cleaned = cleanHtml(result.outcome.body);
+    internalPages.push({ path: pagePath, title: cleaned.pageTitle, cleanedText: cleaned.cleanedText });
+    totalChars += cleaned.cleanedText.length;
+    if (totalChars >= 5000) break;
   }
 
   const site = buildCombinedDigest(homepage, internalPages);
