@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { prisma } from '../db.js';
 import { config } from '../config.js';
-import { sendJob } from '../queue.js';
+import { sendJob, insertJobs } from '../queue.js';
 import { isValidModel } from '../enrichment/ai/cost.js';
 
 // ─── Create Run per §6 ──────────────────────────────────────────────────────
@@ -213,15 +213,19 @@ export async function resumeRun(userId: string, runId: string) {
       where: { runId, status: { in: ['pending', 'retrying'] } },
       select: { id: true },
     });
-    for (const item of pendingItems) {
-      await sendJob('enrich-contact', { runItemId: item.id }, {
-        singletonKey: item.id,
-        retryLimit: 3,
-        retryDelay: 30,
-        retryBackoff: true,
-        expireInMinutes: 10,
-      });
-    }
+    await insertJobs(
+      pendingItems.map((item) => ({
+        name: 'enrich-contact',
+        data: { runItemId: item.id },
+        options: {
+          singletonKey: item.id,
+          retryLimit: 3,
+          retryDelay: 30,
+          retryBackoff: true,
+          expireInMinutes: 10,
+        },
+      }))
+    );
   } else {
     // 4. Scope not materialized → re-queue process-run
     await prisma.enrichmentRun.update({ where: { id: runId }, data: { status: 'queuing' } });
@@ -320,16 +324,20 @@ export async function retryItems(userId: string, runId: string, body: { itemIds?
       isFirstBatch = false;
     }
 
-    // Enqueue jobs
-    for (const item of result) {
-      await sendJob('enrich-contact', { runItemId: item.id }, {
-        singletonKey: item.id,
-        retryLimit: 3,
-        retryDelay: 30,
-        retryBackoff: true,
-        expireInMinutes: 10,
-      });
-    }
+    // Enqueue jobs in bulk
+    await insertJobs(
+      result.map((item) => ({
+        name: 'enrich-contact',
+        data: { runItemId: item.id },
+        options: {
+          singletonKey: item.id,
+          retryLimit: 3,
+          retryDelay: 30,
+          retryBackoff: true,
+          expireInMinutes: 10,
+        },
+      }))
+    );
 
     totalRetried += result.length;
     totalSkipped += batch.length - result.length;

@@ -1,9 +1,22 @@
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { Agent, setGlobalDispatcher } from 'undici';
 import PgBoss from 'pg-boss';
 import { config } from './config.js';
 import { prisma, disconnectAll } from './db.js';
 import { startSummaryLogger, stopSummaryLogger } from './enrichment/pipeline-logger.js';
+
+// ─── HTTP connection tuning ──────────────────────────────────────────────────
+// Node's default undici Agent limits concurrent connections per origin to ~6.
+// With 30 parallel scrapes hitting various proxy adapters, we saturate the pool
+// and stall. Bump to 500 concurrent connections per origin.
+setGlobalDispatcher(new Agent({
+  connections: 500,
+  pipelining: 0, // pipelining disabled — safer for arbitrary third-party servers
+  connect: { timeout: 10_000 },
+  headersTimeout: 10_000,
+  bodyTimeout: 30_000,
+}));
 
 // ─── Instance ID (stable for process lifetime, unique across workers) ────────
 const instanceId = `${os.hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;

@@ -1,5 +1,5 @@
 import { prisma } from '../db.js';
-import { sendJob } from '../queue.js';
+import { insertJobs } from '../queue.js';
 
 const BATCH_SIZE = 5000;
 
@@ -114,16 +114,21 @@ export async function handleProcessRun(job: { data: { runId: string } }) {
         select: { id: true },
       });
 
-      // Fan out enrich-contact jobs
-      for (const item of items) {
-        await sendJob('enrich-contact', { runItemId: item.id }, {
-          singletonKey: item.id,
-          retryLimit: 3,
-          retryDelay: 30,
-          retryBackoff: true,
-          expireInMinutes: 10,
-        });
-      }
+      // Fan out enrich-contact jobs — BULK INSERT (single DB roundtrip)
+      // vs sequential sendJob() which takes 20+ min for 60K items
+      await insertJobs(
+        items.map((item) => ({
+          name: 'enrich-contact',
+          data: { runItemId: item.id },
+          options: {
+            singletonKey: item.id,
+            retryLimit: 3,
+            retryDelay: 30,
+            retryBackoff: true,
+            expireInMinutes: 10,
+          },
+        }))
+      );
       console.log(`[process-run] batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(contactIds.length / BATCH_SIZE)} fanned out (${items.length} items, ${Date.now() - batchStart}ms)`);
     }
 

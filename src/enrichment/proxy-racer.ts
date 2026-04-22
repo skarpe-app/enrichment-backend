@@ -301,7 +301,7 @@ export async function scrapeUrl(
   // Always include direct fetch
   phase1Attempts.push(directFetch(targetUrl, controller.signal));
 
-  const phase1Result = await racePhase(phase1Attempts, 8000);
+  const phase1Result = await racePhase(phase1Attempts, 5000);
   logAttempts(allAttempts, phase1Result, 1, null);
 
   // html → done, non_html → done (don't retry per §12)
@@ -317,7 +317,7 @@ export async function scrapeUrl(
     allorigins(targetUrl, controller.signal),
   ];
 
-  const phase2Result = await racePhase(phase2Attempts, 8000);
+  const phase2Result = await racePhase(phase2Attempts, 5000);
   logAttempts(allAttempts, phase2Result, 2, null);
 
   if (phase2Result.kind === 'html' || phase2Result.kind === 'non_html') {
