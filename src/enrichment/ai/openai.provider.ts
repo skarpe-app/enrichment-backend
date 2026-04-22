@@ -155,18 +155,14 @@ function parseAiResponse(response: any): AiOutputShape {
     throw new AiParseError(`Unparseable AI output: ${rawText.substring(0, 200)}`);
   }
 
-  // Field validation
-  if (!parsed.industry || typeof parsed.industry !== 'string') {
-    throw new AiParseError('Missing or invalid "industry" field');
+  // Accept "classification" as alias for "industry" — stored prompts
+  // commonly return { classification, confidence, reasoning } without sub_industry.
+  const industry = parsed.industry ?? parsed.classification;
+  if (!industry || typeof industry !== 'string') {
+    throw new AiParseError('Missing or invalid "industry"/"classification" field');
   }
   if (!parsed.reasoning || typeof parsed.reasoning !== 'string') {
     throw new AiParseError('Missing or invalid "reasoning" field');
-  }
-
-  // Also accept "classification" as alias for "industry" (common in prompts)
-  const industry = parsed.industry ?? parsed.classification;
-  if (!industry || typeof industry !== 'string') {
-    throw new AiParseError('Missing industry/classification field');
   }
 
   // Confidence normalization per §16
