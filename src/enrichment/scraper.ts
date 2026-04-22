@@ -136,6 +136,24 @@ export async function scrapeDomain(
   // html → clean + create snapshot
   const homepage = cleanHtml(outcome.body);
 
+  // Safety net: if cleaned content looks like a proxy service's own page,
+  // refuse to create a snapshot. Fail cleanly so the AI doesn't classify the proxy itself.
+  if (homepage.looksLikeProxyPage) {
+    const err = 'Scraped content appears to be a proxy service page, not the target website.';
+    await createFailedSnapshot(domain.id, err, outcome.httpStatus, outcome.proxyName);
+    return {
+      success: false,
+      snapshotId: null,
+      combinedDigest: null,
+      scrapeMs: Date.now() - startMs,
+      proxyUsed: outcome.proxyName,
+      error: err,
+      isCache: false,
+      skipReason: null,
+      attempts: scrapeResult.attempts,
+    };
+  }
+
   // Smart multi-page scraping
   const pagesToScrape = getInternalPagesToScrape(homepage.cleanedText.length);
   const internalPages: Array<{ path: string; title: string | null; cleanedText: string }> = [];

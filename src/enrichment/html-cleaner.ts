@@ -10,7 +10,16 @@ export interface CleanedPage {
   headings: string[];
   cleanedText: string;
   contentLength: number;
+  looksLikeProxyPage: boolean;
 }
+
+/**
+ * Safety net — if the title/meta/headings reference a known proxy service,
+ * it's likely we scraped the proxy's own landing/error page, not the target.
+ * Triggered when the first-phase proxy-page detector missed it (new proxy service,
+ * edge case wording, etc.).
+ */
+const PROXY_SERVICE_PATTERN = /\b(?:corsproxy\.io|cors\s*proxy|codetabs|allorigins|corsfix|cors-anywhere|proxy\s*(?:service|api))\b/i;
 
 export interface CleanedSite {
   homepage: CleanedPage;
@@ -59,12 +68,19 @@ export function cleanHtml(html: string): CleanedPage {
     cleanedText = cleanedText.substring(0, MAX_CLEANED_TEXT);
   }
 
+  // Safety-net proxy-page detection: only checks title/meta/headings (not body text)
+  // so a legitimate site mentioning "CORS proxy" in an article is NOT flagged.
+  const looksLikeProxyPage = [pageTitle, metaDescription, ...headings]
+    .filter((v): v is string => !!v)
+    .some((s) => PROXY_SERVICE_PATTERN.test(s));
+
   return {
     pageTitle,
     metaDescription,
     headings: headings.slice(0, 20), // Cap headings
     cleanedText,
     contentLength: html.length,
+    looksLikeProxyPage,
   };
 }
 

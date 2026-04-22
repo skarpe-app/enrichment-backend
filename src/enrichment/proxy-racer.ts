@@ -20,7 +20,7 @@ const SCRAPE_HEADERS = {
 export type ProxyOutcome =
   | { kind: 'html'; body: string; contentType: string; finalUrl: string; httpStatus: number; responseMs: number; proxyName: string }
   | { kind: 'non_html'; contentType: string; finalUrl: string; httpStatus: number; responseMs: number; proxyName: string }
-  | { kind: 'block'; httpStatus: number; responseMs: number; proxyName: string; blockReason: 'access_denied' | 'js_required' | 'cloudflare_challenge' | 'too_short' }
+  | { kind: 'block'; httpStatus: number; responseMs: number; proxyName: string; blockReason: 'access_denied' | 'js_required' | 'cloudflare_challenge' | 'too_short' | 'proxy_page' }
   | { kind: 'error'; error: string; responseMs: number; proxyName: string };
 
 // ─── Block detection signatures ──────────────────────────────────────────────
@@ -28,6 +28,25 @@ const BLOCK_SIGNATURES: Array<{ pattern: RegExp; reason: ProxyOutcome & { kind: 
   { pattern: /access\s*denied/i, reason: 'access_denied' },
   { pattern: /please\s+enable\s+javascript/i, reason: 'js_required' },
   { pattern: /cf-browser-verification|cloudflare/i, reason: 'cloudflare_challenge' },
+];
+
+/**
+ * Detect when the proxy service returned ITS OWN page instead of proxying the target.
+ * Happens on rate limits, errors, or when the proxy's landing page is served.
+ *
+ * Match only within <title>, <meta>, og:*, or top-of-body — not anywhere in body,
+ * because legitimate websites may mention these words in content (e.g. a dev blog
+ * writing about "CORS proxy" would get flagged otherwise).
+ */
+const PROXY_PAGE_SIGNATURES: RegExp[] = [
+  // In <title>, <meta og:title/description> — these should only ever contain the
+  // target website's branding, never the proxy service's.
+  /<title[^>]*>[^<]*(?:corsproxy\.io|cors\s*proxy|codetabs|allorigins|corsfix|cors-anywhere)[^<]*<\/title>/i,
+  /<meta\s+property=["']og:(?:site_name|title)["']\s+content=["'][^"']*(?:corsproxy\.io|codetabs|allorigins|corsfix)[^"']*["']/i,
+  // Common proxy error pages
+  /rate\s*limit\s*(?:exceeded|reached)\s*(?:on|for)?\s*(?:corsproxy|codetabs|allorigins|corsfix)/i,
+  /you\s*(?:have\s*)?(?:exceeded|reached)\s*(?:the\s*)?(?:free\s*)?(?:daily\s*|monthly\s*)?limit.*(?:corsproxy|codetabs|allorigins|corsfix)/i,
+  /(?:corsproxy\.io|allorigins\.win|corsfix\.com|api\.codetabs\.com).{0,200}(?:subscribe|upgrade|get\s*a\s*key|sign\s*up)/i,
 ];
 
 // ─── Core fetch with validation per §12 ──────────────────────────────────────
@@ -69,10 +88,21 @@ async function fetchWithValidation(
       return { kind: 'block', httpStatus: response.status, responseMs, proxyName, blockReason: 'too_short' };
     }
 
-    // Block signature check
+    // Block signature check (generic bot-wall / cloudflare / etc.)
     for (const sig of BLOCK_SIGNATURES) {
       if (sig.pattern.test(body.substring(0, 2000))) {
         return { kind: 'block', httpStatus: response.status, responseMs, proxyName, blockReason: sig.reason };
+      }
+    }
+
+    // Proxy-page detection: only for non-direct fetches (proxy adapters can return
+    // their own branded page on error/rate-limit). Direct fetches are never proxy pages.
+    if (proxyName !== 'direct') {
+      const headSection = body.substring(0, 5000); // title + meta + top of body
+      for (const pattern of PROXY_PAGE_SIGNATURES) {
+        if (pattern.test(headSection)) {
+          return { kind: 'block', httpStatus: response.status, responseMs, proxyName, blockReason: 'proxy_page' };
+        }
       }
     }
 
