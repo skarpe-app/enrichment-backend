@@ -24,10 +24,41 @@ export interface ScrapeOutcome {
 }
 
 /**
+ * In-process domain lock: deduplicates concurrent scrapeDomain() calls for the
+ * same domain within a single worker process. When 15 contacts for acme.com
+ * hit the pipeline simultaneously, only the FIRST actually runs the scrape;
+ * the other 14 await the first's result and read the snapshot from DB.
+ *
+ * This prevents wasted proxy requests + DB writes for duplicate domain fan-outs.
+ * The cross-process case (multiple Render workers) is still handled by the DB
+ * cache check inside scrapeDomainImpl — worst case two workers scrape the same
+ * domain once each, which is acceptable.
+ */
+const inflightScrapes = new Map<string, Promise<ScrapeOutcome>>();
+
+export function scrapeDomain(
+  domainName: string,
+  ttlDays: number,
+  forceRescrape: boolean,
+  runId: string | null
+): Promise<ScrapeOutcome> {
+  // Key includes forceRescrape so a forced scrape doesn't latch onto a normal one
+  const key = `${domainName}|${forceRescrape ? '1' : '0'}`;
+  const existing = inflightScrapes.get(key);
+  if (existing) return existing;
+
+  const promise = scrapeDomainImpl(domainName, ttlDays, forceRescrape, runId).finally(() => {
+    inflightScrapes.delete(key);
+  });
+  inflightScrapes.set(key, promise);
+  return promise;
+}
+
+/**
  * Full scrape pipeline for a single domain per §10 steps 3-4.
  * Returns a snapshot (fresh or cached) or a failure reason.
  */
-export async function scrapeDomain(
+async function scrapeDomainImpl(
   domainName: string,
   ttlDays: number,
   forceRescrape: boolean,

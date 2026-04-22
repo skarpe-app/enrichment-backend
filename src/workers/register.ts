@@ -27,12 +27,20 @@ export async function registerAllHandlers(boss: PgBoss) {
     }
   });
 
-  // enrich-contact: concurrency 15, per §11
-  await boss.work('enrich-contact', { teamSize: 15 } as any, async (jobs: any[]) => {
-    for (const job of jobs) {
-      await enrichContact((job.data as { runItemId: string }).runItemId);
+  // enrich-contact: concurrency 30 (bumped from 15 for faster throughput).
+  // - teamSize: 30 items fetched per polling cycle
+  // - teamConcurrency: 30 items processed in PARALLEL within the batch
+  // - pollingIntervalSeconds: 0.5 — poll 4× faster than default 2s
+  // Tuned for OpenAI Tier 1/2 (~500 RPM, 200K TPM on gpt-4.1-mini).
+  await boss.work(
+    'enrich-contact',
+    { teamSize: 30, teamConcurrency: 30, pollingIntervalSeconds: 0.5 } as any,
+    async (jobs: any[]) => {
+      await Promise.all(
+        jobs.map((job) => enrichContact((job.data as { runItemId: string }).runItemId))
+      );
     }
-  });
+  );
 
   // custom-field-cleanup: concurrency 1
   await boss.work('custom-field-cleanup', { teamSize: 1 } as any, async (jobs: any[]) => {
