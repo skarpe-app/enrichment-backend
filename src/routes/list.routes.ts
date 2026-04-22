@@ -141,6 +141,13 @@ export async function listRoutes(app: FastifyInstance) {
     const page = Math.max(1, parseInt(query.page ?? '1', 10) || 1);
     const pageSize = Math.min(500, Math.max(1, parseInt(query.pageSize ?? '50', 10) || 50));
     const search = query.q?.trim() || undefined;
+    const statusFilter = query.status?.trim() || undefined;
+    // statusFilter values:
+    //   'not_run'    — no latest_result_id (never enriched)
+    //   'completed'  — latestResult.status = completed
+    //   'failed'     — latestResult.status = failed
+    //   'skipped'    — latestResult.status = skipped
+    //   'in_progress'— latestResult.status in (pending, scraping, classifying, retrying)
 
     const { prisma } = await import('../db.js');
 
@@ -153,6 +160,14 @@ export async function listRoutes(app: FastifyInstance) {
         { name: { contains: search, mode: 'insensitive' } },
         { companyName: { contains: search, mode: 'insensitive' } },
       ];
+    }
+
+    if (statusFilter === 'not_run') {
+      where.latestResultId = null;
+    } else if (statusFilter === 'in_progress') {
+      where.latestResult = { status: { in: ['pending', 'scraping', 'classifying', 'retrying'] } };
+    } else if (['completed', 'failed', 'skipped'].includes(statusFilter ?? '')) {
+      where.latestResult = { status: statusFilter };
     }
 
     const [contacts, totalItems] = await Promise.all([

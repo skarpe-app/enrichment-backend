@@ -19,8 +19,22 @@ export async function getUserLists(
     prisma.contactList.count({ where }),
   ]);
 
+  // Enrichment completion count per list (contacts with latest_successful_result_id set)
+  const listIds = data.map((l) => l.id);
+  const enrichedCounts = listIds.length > 0
+    ? await prisma.contact.groupBy({
+        by: ['listId'],
+        where: { listId: { in: listIds }, latestSuccessfulResultId: { not: null } },
+        _count: { _all: true },
+      })
+    : [];
+  const enrichedMap = new Map(enrichedCounts.map((r) => [r.listId, r._count._all]));
+
   return {
-    data: data.map(serializeListSummary),
+    data: data.map((list) => ({
+      ...serializeListSummary(list),
+      enrichedCount: enrichedMap.get(list.id) ?? 0,
+    })),
     pagination: {
       page,
       pageSize,
