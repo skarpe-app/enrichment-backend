@@ -9,10 +9,13 @@ const BATCH_SIZE = 5000;
  */
 export async function handleProcessRun(job: { data: { runId: string } }) {
   const { runId } = job.data;
+  const startedAt = Date.now();
 
   const run = await prisma.enrichmentRun.findUnique({ where: { id: runId } });
   if (!run) return;
   if (run.status === 'stopped') return;
+
+  console.log(`[process-run] START run=${runId.slice(0, 8)} scope=${run.scopeType} list=${run.listId.slice(0, 8)}`);
 
   try {
     // ─── 1-2. Resolve contacts from scope ─────────────────────────────────
@@ -81,15 +84,20 @@ export async function handleProcessRun(job: { data: { runId: string } }) {
     });
 
     // ─── 6. Batch fan-out ─────────────────────────────────────────────────
+    console.log(`[process-run] fanning out ${contactIds.length} items in batches of ${BATCH_SIZE}...`);
     for (let i = 0; i < contactIds.length; i += BATCH_SIZE) {
       // Check if stopped mid-fan-out
       const currentRun = await prisma.enrichmentRun.findUnique({
         where: { id: runId },
         select: { status: true },
       });
-      if (currentRun?.status === 'stopped') return; // Leave scope_materialized = false
+      if (currentRun?.status === 'stopped') {
+        console.log(`[process-run] STOPPED mid-fan-out at batch ${i}/${contactIds.length}`);
+        return;
+      }
 
       const batch = contactIds.slice(i, i + BATCH_SIZE);
+      const batchStart = Date.now();
 
       // Create RunItems (idempotent via unique constraint)
       await prisma.enrichmentRunItem.createMany({
@@ -116,6 +124,7 @@ export async function handleProcessRun(job: { data: { runId: string } }) {
           expireInMinutes: 10,
         });
       }
+      console.log(`[process-run] batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(contactIds.length / BATCH_SIZE)} fanned out (${items.length} items, ${Date.now() - batchStart}ms)`);
     }
 
     // ─── 7. Atomic finalization ───────────────────────────────────────────
@@ -147,6 +156,7 @@ export async function handleProcessRun(job: { data: { runId: string } }) {
         data: { scopeMaterialized: true, status: 'processing' },
       });
     }
+    console.log(`[process-run] DONE run=${runId.slice(0, 8)} total=${contactIds.length} duration=${Math.round((Date.now() - startedAt) / 1000)}s`);
   } catch (err) {
     console.error(`process-run ${runId} failed:`, err);
     const errorMsg = err instanceof Error ? err.message : 'Fan-out error';

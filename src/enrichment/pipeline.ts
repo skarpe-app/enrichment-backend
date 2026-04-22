@@ -10,6 +10,10 @@ import {
 } from './domain-intelligence.service.js';
 import { getDecryptedApiKey } from '../services/settings.service.js';
 import { extractEmailDomain, extractWebsiteDomain } from '../utils/domain.js';
+import {
+  logStart, logScrape, logClassify, logDone,
+  statsStart, statsDone,
+} from './pipeline-logger.js';
 import type { EnrichmentRun, EnrichmentRunItem, Contact } from '@prisma/client';
 
 const aiProvider = new OpenAiProvider();
@@ -19,6 +23,8 @@ const aiProvider = new OpenAiProvider();
  * Handles: atomic claim → domain resolution → cache check → scrape → classify → store results.
  */
 export async function enrichContact(runItemId: string): Promise<void> {
+  const startedAt = Date.now();
+
   // ─── 1. LOAD CONTEXT + ATOMIC CLAIM ──────────────────────────────────────
   const claimed = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
     `UPDATE enrichment_run_items
@@ -43,6 +49,11 @@ export async function enrichContact(runItemId: string): Promise<void> {
   // If run is stopped, exit silently
   if (run.status === 'stopped') return;
 
+  logStart(runItemId, contact.emailDomain ?? contact.websiteDomain ?? null);
+  statsStart();
+  let finalStatus: 'completed' | 'failed' | 'skipped' = 'failed';
+  let wasCacheHit = false;
+
   // Resolve API key
   const apiKey = run.billingSource === 'user_credential' && run.aiCredentialId
     ? await getDecryptedApiKey(run.aiCredentialId)
@@ -53,6 +64,9 @@ export async function enrichContact(runItemId: string): Promise<void> {
     const domainResult = resolveDomain(contact, run);
 
     if (domainResult.skip) {
+      logScrape(runItemId, domainResult.domain ?? 'no-domain', {
+        success: false, isCache: false, ms: 0, proxy: null, skipReason: domainResult.skipReason,
+      });
       await finishItem(runItemId, run.id, contact.id, {
         status: 'skipped',
         skipReason: domainResult.skipReason!,
@@ -60,6 +74,7 @@ export async function enrichContact(runItemId: string): Promise<void> {
         domain: domainResult.domain,
         domainSource: domainResult.domainSource,
       });
+      finalStatus = 'skipped';
       return;
     }
 
@@ -113,6 +128,15 @@ export async function enrichContact(runItemId: string): Promise<void> {
       });
     }
 
+    logScrape(runItemId, domain, {
+      success: scrapeResult.success,
+      isCache: scrapeResult.isCache,
+      ms: scrapeResult.scrapeMs,
+      proxy: scrapeResult.proxyUsed,
+      error: scrapeResult.error,
+      skipReason: scrapeResult.skipReason,
+    });
+
     if (scrapeResult.skipReason) {
       await finishItem(runItemId, run.id, contact.id, {
         status: 'skipped',
@@ -121,6 +145,7 @@ export async function enrichContact(runItemId: string): Promise<void> {
         scrapeMs: scrapeResult.scrapeMs,
         proxyUsed: scrapeResult.proxyUsed,
       });
+      finalStatus = 'skipped';
       return;
     }
 
@@ -153,6 +178,10 @@ export async function enrichContact(runItemId: string): Promise<void> {
 
     if (cached) {
       // Cache hit → scraping → completed directly (skip classifying per §5.8)
+      logClassify(runItemId, {
+        cached: true, ms: 0, inputTokens: 0, outputTokens: 0, costUsd: 0,
+        industry: cached.industry,
+      });
       await finishItem(runItemId, run.id, contact.id, {
         status: 'completed',
         scrapeStatus: scrapeResult.isCache ? 'cached' : 'success',
@@ -168,6 +197,8 @@ export async function enrichContact(runItemId: string): Promise<void> {
         classifyMs: 0,
         cacheHit: true,
       });
+      finalStatus = 'completed';
+      wasCacheHit = true;
       return;
     }
 
@@ -213,6 +244,15 @@ export async function enrichContact(runItemId: string): Promise<void> {
       classifyMs: classResult.classifyMs,
     });
 
+    logClassify(runItemId, {
+      cached: false,
+      ms: classResult.classifyMs,
+      inputTokens: classResult.inputTokens,
+      outputTokens: classResult.outputTokens,
+      costUsd: classResult.costUsd,
+      industry: classResult.industry,
+    });
+
     // ─── 7. STORE RESULTS ───────────────────────────────────────────────────
     await finishItem(runItemId, run.id, contact.id, {
       status: 'completed',
@@ -228,12 +268,22 @@ export async function enrichContact(runItemId: string): Promise<void> {
       deltaCostUsd: classResult.costUsd,
       classifyMs: classResult.classifyMs,
     });
+    finalStatus = 'completed';
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown pipeline error';
+    logClassify(runItemId, {
+      cached: false, ms: 0, inputTokens: 0, outputTokens: 0, costUsd: 0,
+      error: errorMsg,
+    });
     await finishItem(runItemId, run.id, contact.id, {
       status: 'failed',
       scrapeError: errorMsg,
     });
+    finalStatus = 'failed';
+  } finally {
+    const totalMs = Date.now() - startedAt;
+    logDone(runItemId, totalMs, finalStatus);
+    statsDone(finalStatus, totalMs, wasCacheHit);
   }
 }
 

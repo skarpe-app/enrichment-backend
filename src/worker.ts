@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import PgBoss from 'pg-boss';
 import { config } from './config.js';
 import { prisma, disconnectAll } from './db.js';
+import { startSummaryLogger, stopSummaryLogger } from './enrichment/pipeline-logger.js';
 
 // ─── Instance ID (stable for process lifetime, unique across workers) ────────
 const instanceId = `${os.hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
@@ -93,11 +94,15 @@ async function start() {
   // Register handlers
   await registerHandlers();
 
+  // Start periodic summary (every 30s) — aggregates pipeline throughput stats
+  startSummaryLogger();
+
   console.log(`Worker ${instanceId} is running`);
 
   // ─── Graceful shutdown ─────────────────────────────────────────────────
   async function shutdown() {
     console.log('Worker shutting down...');
+    stopSummaryLogger();
     clearInterval(heartbeatTimer);
     await boss.stop({ graceful: true, timeout: 30_000 });
     await disconnectAll();
